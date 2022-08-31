@@ -146,7 +146,6 @@ class BOL_API:
             shipmentdetails_firstname,
             shipmentdetails_surname,
             shipmentdetails_zipcode,
-            winkel_artikel,
             order_offerreference,
             order_ean
             FROM   orders_bol O
@@ -178,14 +177,12 @@ class BOL_API:
                             "transport": {"transporterCode": "DPD-NL", "trackAndTrace": it["parcel_number"]},
                         }
                         transport_info_json = json.dumps(transport_info_dict, indent=4)
-                        print(transport_info_json)
                     url = f"https://api.bol.com/retailer/orders/shipment"
                     tasks.append(asyncio.ensure_future(self.send_shipment(client, url, transport_info_json)))
             processed_items = await asyncio.gather(*tasks)
         result_list_filterd = [i for i in processed_items if i]
         process_id_posted_products = [resp.json().get("processStatusId") for resp in result_list_filterd]
         process_id_posted_producs_list = [process_id_posted_products[i : i + 100] for i in range(0, len(process_id_posted_products), 100)]
-        print(process_id_posted_products)
         return process_id_posted_producs_list
 
     @Decorators.handle_url_exceptions
@@ -209,7 +206,6 @@ class BOL_API:
         if result_list_filterd:
             results = [status_result.json() if status_result else {} for status_result in result_list_filterd]
             verwerkte_resultaten = pd.DataFrame(results)
-            # verwerkte_resultaten.to_csv(f"test_dpd_bol_api_tt_{winkel}_{date_now}.csv", index=False)
             verwerkte_resultaten_ref = verwerkte_resultaten.merge(import_file, left_on="entityId", right_on="order_orderitemid", how="left")
             verwerkte_resultaten_ref.to_csv(f"{Path.cwd() / 'verwerkt'}{os.sep}dpd_bol_api_tt_{winkel}_{date_now}.csv", index=False)
 
@@ -260,11 +256,12 @@ for winkel in dpd_shipment_winkels:
     bol_items_max_per_request = [order_to_sent_to_bol_dict[i : i + 100] for i in range(0, len(order_to_sent_to_bol_dict), 100)]
     bol_call_upload = BOL_API(config["bol_api_urls"]["authorize_url"], client_id, client_secret)
     results = asyncio.run(bol_call_upload.send_shiping_info_to_bol(bol_items_max_per_request))
-    time.sleep(30)
-    bol_call_results = BOL_API(config["bol_api_urls"]["authorize_url"], client_id, client_secret)
-    asyncio.run(
-        bol_call_results.results_bol_upload(results, bol_winkel, order_to_sent_to_bol[["orderid", "order_orderitemid", "parcel_number"]])
-    )
+    if len(results) > 0:
+        time.sleep(30)
+        bol_call_results = BOL_API(config["bol_api_urls"]["authorize_url"], client_id, client_secret)
+        asyncio.run(
+            bol_call_results.results_bol_upload(results, bol_winkel, order_to_sent_to_bol[["orderid", "order_orderitemid", "parcel_number"]])
+        )
 
 for file in export_files: # opruimen zodra verzonden
     file.unlink()
