@@ -232,6 +232,7 @@ elif len(export_files) == 1:
         usecols=["parcel_number", "parcel_reference1", "recipient_zip"],
     )
 else:
+    dpd_shipment_info = pd.DataFrame(columns=["parcel_number", "parcel_reference1", "recipient_zip"])
     print("oeps, je moet een export dpd bestand in de import map plaatsen")
 
 
