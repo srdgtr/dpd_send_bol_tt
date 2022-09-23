@@ -218,9 +218,10 @@ if len(export_files) > 1:
             pd.read_csv(
                 f,
                 sep=";",
-                dtype={"parcel_number": object,"parcel_reference1":"int64"},
+                dtype={"parcel_number": object,},
                 usecols=["parcel_number", "parcel_reference1", "recipient_zip"],
-            )
+                converters={"parcel_reference1": lambda x: pd.to_numeric(x, errors="coerce")},
+            ).query("parcel_reference1 == parcel_reference1")
             for f in export_files
         ]
     )
@@ -228,9 +229,10 @@ elif len(export_files) == 1:
     dpd_shipment_info = pd.read_csv(
         max(export_files),
         sep=";",
-        dtype={"parcel_number": object,"parcel_reference1":"int64"},
+        dtype={"parcel_number": object},
         usecols=["parcel_number", "parcel_reference1", "recipient_zip"],
-    )
+        converters={"parcel_reference1": lambda x: pd.to_numeric(x, errors="coerce")},
+    ).query("parcel_reference1 == parcel_reference1")
 else:
     dpd_shipment_info = pd.DataFrame(columns=["parcel_number", "parcel_reference1", "recipient_zip"])
     print("oeps, je moet een export dpd bestand in de import map plaatsen")
