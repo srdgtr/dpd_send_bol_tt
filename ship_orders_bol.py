@@ -7,6 +7,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from itertools import chain
 
 
 def install(package):
@@ -104,8 +105,8 @@ class BOL_API:
             token = json.loads(init_request.text)["access_token"]
             if token:  # add right headers
                 post_header = {
-                    "Accept": "application/vnd.retailer.v7+json",
-                    "Content-Type": "application/vnd.retailer.v7+json",
+                    "Accept": "application/vnd.retailer.v8+json",
+                    "Content-Type": "application/vnd.retailer.v8+json",
                     "Authorization": "Bearer " + token,
                     "Connection": "keep-alive",
                 }
@@ -157,29 +158,19 @@ class BOL_API:
 
     @Decorators.handle_url_exceptions
     @Decorators.refreshToken
-    async def send_shipment(self, client, url, info):
-        resp = await client.put(url, headers=self.access_token, data=info)
-        resp.raise_for_status()
-        return resp
-
-    async def send_shiping_info_to_bol(self, items):
+    async def send_shiping_info_to_bol(self, items): #not async as otherwise bol cant process if multiple items under same ordernumber in one request
         timeout = httpx.Timeout(5, read=None)
-        limits = httpx.Limits(max_keepalive_connections=2, max_connections=4)
-        async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
-            tasks = []
-            for item in items:
-                for it in item:
-                    all_order_items = it["order_orderitemid_all"].split("_")
-                    for order_item_ids in all_order_items:
-                        transport_info_dict = {
-                            "orderItems": [{"orderItemId": order_item_ids}],
-                            "shipmentReference": None,
-                            "transport": {"transporterCode": "DPD-NL", "trackAndTrace": it["parcel_number"]},
-                        }
-                        transport_info_json = json.dumps(transport_info_dict, indent=4)
-                    url = f"https://api.bol.com/retailer/orders/shipment"
-                    tasks.append(asyncio.ensure_future(self.send_shipment(client, url, transport_info_json)))
-            processed_items = await asyncio.gather(*tasks)
+        processed_items = []
+        for orders in chain.from_iterable(items):
+            transport_info_dict = {
+                "orderItems": [{"orderItemId": orders["order_orderitemid"]}],
+                "shipmentReference": None,
+                "transport": {"transporterCode": "DPD-NL", "trackAndTrace": orders["parcel_number"]},
+            }
+            transport_info_json = json.dumps(transport_info_dict, indent=4)
+            # print(transport_info_json)
+            url = f"https://api.bol.com/retailer/orders/shipment"
+            processed_items.append(httpx.request("PUT",timeout=timeout, url = url, headers=self.access_token, data=transport_info_json))
         result_list_filterd = [i for i in processed_items if i]
         process_id_posted_products = [resp.json().get("processStatusId") for resp in result_list_filterd]
         process_id_posted_producs_list = [process_id_posted_products[i : i + 100] for i in range(0, len(process_id_posted_products), 100)]
@@ -199,7 +190,7 @@ class BOL_API:
             tasks_res = []
             for proces_ids in updated:
                 for proces_id in proces_ids:
-                    url = f"https://api.bol.com/retailer/process-status/{proces_id}"
+                    url = f"https://api.bol.com/shared/process-status/{proces_id}"
                     tasks_res.append(asyncio.ensure_future(self.status_bol_proces(client_res, url)))
             result_list = await asyncio.gather(*tasks_res)
         result_list_filterd = [i for i in result_list if i]
@@ -220,8 +211,9 @@ if len(export_files) > 1:
                 sep=";",
                 dtype={"parcel_number": object,},
                 usecols=["parcel_number", "parcel_reference1", "recipient_zip"],
-                converters={"parcel_reference1": lambda x: pd.to_numeric(x, errors="coerce")},
-            ).query("parcel_reference1 == parcel_reference1")
+            ).assign(order_id = lambda x: pd.to_numeric(x.parcel_reference1.str.split("_").str[0], errors="coerce"),
+                order_items = lambda x: x.parcel_reference1.str.split("_").str[1:],
+            ).query("order_id == order_id")
             for f in export_files
         ]
     )
@@ -231,10 +223,11 @@ elif len(export_files) == 1:
         sep=";",
         dtype={"parcel_number": object},
         usecols=["parcel_number", "parcel_reference1", "recipient_zip"],
-        converters={"parcel_reference1": lambda x: pd.to_numeric(x, errors="coerce")},
-    ).query("parcel_reference1 == parcel_reference1")
+    ).assign(order_id = lambda x: pd.to_numeric(x.parcel_reference1.str.split("_").str[0], errors="coerce"),
+        order_items = lambda x: x.parcel_reference1.str.split("_").str[1:],
+    ).query("order_id == order_id")
 else:
-    dpd_shipment_info = pd.DataFrame(columns=["parcel_number", "parcel_reference1", "recipient_zip"])
+    dpd_shipment_info = pd.DataFrame(columns=["parcel_number","recipient_zip","order_items","order_id",])
     print("oeps, je moet een export dpd bestand in de import map plaatsen")
 
 
@@ -245,16 +238,10 @@ for winkel in dpd_shipment_winkels:
     order_to_sent_to_bol = bol_open_orders.merge(
         dpd_shipment_info,
         left_on=["orderid", "shipmentdetails_zipcode"],
-        right_on=["parcel_reference1", "recipient_zip"],
+        right_on=["order_id", "recipient_zip"],
         how="left",
     ).dropna(subset="parcel_reference1")
-    gb = (
-        order_to_sent_to_bol.groupby("orderid")["order_orderitemid"]
-        .apply("_".join)
-        .reset_index()
-        .rename(columns={"order_orderitemid": "order_orderitemid_all"})
-    )# voor als een order meerdere item id's heeft
-    order_to_sent_to_bol = order_to_sent_to_bol.merge(gb, on="orderid").drop_duplicates("orderid")
+    order_to_sent_to_bol = order_to_sent_to_bol.drop_duplicates("order_orderitemid")
     order_to_sent_to_bol_dict = order_to_sent_to_bol.to_dict("records")
     bol_items_max_per_request = [order_to_sent_to_bol_dict[i : i + 100] for i in range(0, len(order_to_sent_to_bol_dict), 100)]
     bol_call_upload = BOL_API(config["bol_api_urls"]["authorize_url"], client_id, client_secret)
