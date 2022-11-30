@@ -1,6 +1,5 @@
 import asyncio
 import configparser
-import json
 import os
 import subprocess
 import sys
@@ -102,7 +101,7 @@ class BOL_API:
             print(e)
             return None
         else:
-            token = json.loads(init_request.text)["access_token"]
+            token = init_request.json()["access_token"]
             if token:  # add right headers
                 post_header = {
                     "Accept": "application/vnd.retailer.v8+json",
@@ -167,10 +166,8 @@ class BOL_API:
                 "shipmentReference": None,
                 "transport": {"transporterCode": "DPD-NL", "trackAndTrace": orders["parcel_number"]},
             }
-            transport_info_json = json.dumps(transport_info_dict, indent=4)
-            # print(transport_info_json)
             url = f"https://api.bol.com/retailer/orders/shipment"
-            processed_items.append(httpx.request("PUT",timeout=timeout, url = url, headers=self.access_token, data=transport_info_json))
+            processed_items.append(httpx.request("PUT",timeout=timeout, url = url, headers=self.access_token, json=transport_info_dict))
         result_list_filterd = [i for i in processed_items if i]
         process_id_posted_products = [resp.json().get("processStatusId") for resp in result_list_filterd]
         process_id_posted_producs_list = [process_id_posted_products[i : i + 100] for i in range(0, len(process_id_posted_products), 100)]
@@ -183,6 +180,8 @@ class BOL_API:
         resp.raise_for_status()
         return resp
 
+    @Decorators.handle_url_exceptions
+    @Decorators.refreshToken
     async def results_bol_upload(self, updated, winkel, import_file):
         timeout = httpx.Timeout(30, read=None)
         limits = httpx.Limits(max_keepalive_connections=2, max_connections=6)
@@ -234,7 +233,7 @@ else:
 for winkel in dpd_shipment_winkels:
     client_id, client_secret, bol_winkel, winkel_letter = [x.strip() for x in config.get("bol_winkels_api", winkel).split(",")]
 
-    bol_open_orders = BOL_API.open_orders_pd(bol_winkel).assign(orderid=lambda x: x.orderid.str.split("_").str[0].astype("int64"))
+    bol_open_orders = BOL_API.open_orders_pd(bol_winkel).dropna(subset=['orderid']).assign(orderid=lambda x: x.orderid.str.split("_").str[0].astype("int64"))
     order_to_sent_to_bol = bol_open_orders.merge(
         dpd_shipment_info,
         left_on=["orderid", "shipmentdetails_zipcode"],
